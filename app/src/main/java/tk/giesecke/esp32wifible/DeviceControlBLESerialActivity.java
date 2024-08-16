@@ -11,19 +11,32 @@ import android.content.ServiceConnection;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.ringo.RGConfig;
+import com.ringo.RGConfigType;
+import com.ringo.RGConfigInteger;
+import com.ringo.RGConfigString;
+
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+
+import java.util.Arrays;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import static tk.giesecke.esp32wifible.DeviceScanActivity.EXTRAS_DEVICE;
 import static tk.giesecke.esp32wifible.DeviceScanActivity.EXTRAS_DEVICE_ADDRESS;
@@ -60,6 +73,18 @@ public class DeviceControlBLESerialActivity extends Activity {
 	private Menu thisMenu;
 
 	private Boolean firstView = true;
+
+	private LinearLayout llConfig;
+
+	private final Handler mainLooper = new Handler(Looper.getMainLooper());
+
+	private DeviceControlBLESerialActivity thisActivity;
+	private int ble_state;
+	private int ble_state_timer100ms = 0;
+	private String ble_write_string;
+	private String ble_read_string;
+	private int ble_config_count;
+	private int ble_config_index;
 
 	// Code to manage Service lifecycle.
 	private final ServiceConnection mServiceConnection = new ServiceConnection() {
@@ -143,40 +168,58 @@ public class DeviceControlBLESerialActivity extends Activity {
                         }
 						if (data != null) {
 							// Decode the data
-							byte[] decodedData = xorCode(mmDevice.getName(),data,data.length);
-							String finalData = new String(decodedData);
+							//byte[] decodedData = xorCode(mmDevice.getName(),data,data.length);
+							//String finalData = new String(decodedData);
 
-							displayData("Received:\n--\n" + data + "\n--\n" + finalData);
+							//displayData("Received:\n--\n" + data + "\n--\n" + finalData);
 
+							ble_read_string = new String(BleSerial_decode(data));
+							Log.d(TAG, "rs " + ble_read_string);
+							displayData("Received:\n--\n" + data + "\n--\n" + ble_read_string);
 							// Get stored WiFi credentials from the received data
+							/*
 							JSONObject receivedConfigJSON;
 							try {
 								receivedConfigJSON = new JSONObject(finalData);
 								boolean write = false;
+								boolean enumerate = false;
 								if (receivedConfigJSON.has("write")) {
 									write = receivedConfigJSON.getBoolean("write");
 								}
+								if (receivedConfigJSON.has("enumerate")) {
+									enumerate = receivedConfigJSON.getBoolean("enumerate");
+								}
 								if (write == false) {
-									if (receivedConfigJSON.has("ssidPrim")) {
-										ssidPrimString = receivedConfigJSON.getString("ssidPrim");
-										ssidPrimET.setText(ssidPrimString);
-									}
-									if (receivedConfigJSON.has("pwPrim")) {
-										pwPrimString = receivedConfigJSON.getString("pwPrim");
-										pwPrimET.setText(pwPrimString);
-									}
-									if (receivedConfigJSON.has("ssidSec")) {
-										ssidSecString = receivedConfigJSON.getString("ssidSec");
-										ssidSecET.setText(ssidSecString);
-									}
-									if (receivedConfigJSON.has("pwSec")) {
-										pwSecString = receivedConfigJSON.getString("pwSec");
-										pwSecET.setText(pwSecString);
+									if (enumerate) {
+										llConfig.removeAllViews();
+										JSONArray jaConfig = receivedConfigJSON.getJSONArray("configs");
+										String s = jaConfig.getString(0);
+										RGConfig rgc = RGConfigFromJson(s);
+										View v = rgc.getView();
+										llConfig.addView(v);
+									} else {
+										if (receivedConfigJSON.has("ssidPrim")) {
+											ssidPrimString = receivedConfigJSON.getString("ssidPrim");
+											ssidPrimET.setText(ssidPrimString);
+										}
+										if (receivedConfigJSON.has("pwPrim")) {
+											pwPrimString = receivedConfigJSON.getString("pwPrim");
+											pwPrimET.setText(pwPrimString);
+										}
+										if (receivedConfigJSON.has("ssidSec")) {
+											ssidSecString = receivedConfigJSON.getString("ssidSec");
+											ssidSecET.setText(ssidSecString);
+										}
+										if (receivedConfigJSON.has("pwSec")) {
+											pwSecString = receivedConfigJSON.getString("pwSec");
+											pwSecET.setText(pwSecString);
+										}
 									}
 								}
 							} catch (JSONException e) {
 								e.printStackTrace();
 							}
+							*/
 						}
                         break;
 
@@ -190,6 +233,57 @@ public class DeviceControlBLESerialActivity extends Activity {
 			}
 		}
 	};
+
+	public RGConfig RGConfigFromJson(String s) {
+		RGConfig rgc;
+		rgc = RGConfigIntegerFromJson(s);
+		if (rgc != null)
+			return rgc;
+		rgc = RGConfigStringFromJson(s);
+		if (rgc != null)
+			return rgc;
+
+		return null;
+	}
+
+	public RGConfigInteger RGConfigIntegerFromJson(String s) {
+		RGConfigInteger rgc = null;
+		try {
+			rgc = new RGConfigInteger();
+			rgc.fromJson(s);
+			if (rgc.getType() == RGConfigType.Switch) {
+				rgc.Create(this);
+			}
+			if (rgc.getType() == RGConfigType.SeekBar) {
+				rgc.Create(this);
+			}
+			if (rgc.getType() == RGConfigType.Spinner) {
+				rgc.Create(this);
+			}
+			if (rgc.getType() == RGConfigType.Number) {
+				rgc.Create(this);
+			}
+		} catch(Exception ex) {
+			ex.printStackTrace();
+			rgc = null;
+		}
+		return rgc;
+	}
+
+	public RGConfigString RGConfigStringFromJson(String s) {
+		RGConfigString rgc = null;
+		try {
+			rgc = new RGConfigString();
+			rgc.fromJson(s);
+			if (rgc.getType() == RGConfigType.Text) {
+				rgc.Create(this);
+			}
+		} catch(Exception ex) {
+			ex.printStackTrace();
+			rgc = null;
+		}
+		return rgc;
+	}
 
 	private void clearUI() {
 		mDataField.setText(R.string.no_data);
@@ -230,6 +324,136 @@ public class DeviceControlBLESerialActivity extends Activity {
 		getActionBar().setDisplayHomeAsUpEnabled(true);
 		Intent gattServiceIntent = new Intent(this, BluetoothLeService.class);
 		bindService(gattServiceIntent, mServiceConnection, BIND_AUTO_CREATE);
+
+		llConfig = findViewById(R.id.llConfig);
+
+		thisActivity = this;
+
+		Timer t = new Timer();
+		TimerTask tt = new TimerTask() {
+			@Override
+			public void run() {
+				mainLooper.post(new Runnable() {
+					@Override
+					public void run() {
+						thisActivity.timer1_Tick();
+					}
+				});
+			}
+		};
+		t.scheduleAtFixedRate(tt, 0, 100);
+	}
+
+	public void timer1_Tick() {
+		if (ble_state_timer100ms > 0)
+			ble_state_timer100ms--;
+		if (ble_state_timer100ms == 0) {
+			ble_state_timer100ms = 10;
+		}
+		JSONObject jo;
+
+		switch(ble_state) {
+		case 0:
+			break;
+
+		case 100:
+			llConfig.removeAllViews();
+			jo = new JSONObject();
+			try {
+				jo.put("read", "config_count"); // phone <- esp32
+			} catch (JSONException e) {
+				e.printStackTrace();
+				Toast.makeText(this, "json parse failed", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			}
+			ble_read_string = "";
+			ble_write_string = jo.toString();
+			Log.d(TAG, "ws " + ble_write_string);
+			mBluetoothLeService.writeNrfCharacteristic(BleSerial_decode(ble_write_string.getBytes()));
+			ble_state_timer100ms = 10;
+			ble_state++;
+
+		case 101:
+			if (ble_state_timer100ms == 0) {
+				Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			}
+			if (ble_read_string.equals(""))
+				break;
+
+			try {
+				ble_config_count = 0;
+				jo = new JSONObject(ble_read_string);
+				jo.getString("read");
+				ble_config_count = jo.getInt("config_count");
+			} catch (JSONException e) {
+				e.printStackTrace();
+				Toast.makeText(this, "json parse failed", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			}
+			ble_config_index = 0;
+			ble_state++;
+			break;
+
+		case 102:
+			jo = new JSONObject();
+			try {
+				jo.put("read", "config_index");
+				jo.put("config_index", ble_config_index);
+			} catch (JSONException e) {
+				e.printStackTrace();
+				Toast.makeText(this, "json create failed", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			}
+			ble_read_string = "";
+			ble_write_string = jo.toString();
+			Log.d(TAG, "ws " + ble_write_string);
+			mBluetoothLeService.writeNrfCharacteristic(BleSerial_decode(ble_write_string.getBytes()));
+			ble_state_timer100ms = 10;
+			ble_state++;
+			break;
+
+		case 103:
+			if (ble_state_timer100ms == 0) {
+				Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			}
+			if (ble_read_string.equals(""))
+				break;
+
+			try {
+				jo = new JSONObject(ble_read_string);
+				RGConfig rgc = RGConfigFromJson(ble_read_string);
+				View v = rgc.getView();
+				llConfig.addView(v);
+			} catch (JSONException e) {
+				e.printStackTrace();
+				Toast.makeText(this, "json parse failed", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			} catch (Exception e) {
+				e.printStackTrace();
+				Toast.makeText(this, "exception failed", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			}
+			ble_state++;
+			break;
+
+		case 104:
+			ble_config_index++;
+			if (ble_config_index >= ble_config_count) {
+				ble_state = 0;
+				break;
+			}
+			ble_state = 102;
+			break;
+		}
 	}
 
 	@Override
@@ -315,6 +539,8 @@ public class DeviceControlBLESerialActivity extends Activity {
 
 	@SuppressWarnings("unused")
 	public void onClickWrite(View v){
+		ble_state = 200;
+		/*
 		if(mBluetoothLeService != null) {
 
 			// Update credentials with last edit text values
@@ -376,10 +602,14 @@ public class DeviceControlBLESerialActivity extends Activity {
 			mBluetoothLeService.writeNrfCharacteristic(decodedData);
 			displayData(getResources().getString(R.string.update_config));
 		}
+		*/
 	}
 
 	@SuppressWarnings("unused")
 	public void onClickRead(View v){
+		ble_state = 100;
+
+		/*
 		if(mBluetoothLeService != null) {
 
 			// Update credentials with last edit text values
@@ -401,6 +631,7 @@ public class DeviceControlBLESerialActivity extends Activity {
 			mBluetoothLeService.writeNrfCharacteristic(decodedData);
 			displayData(getResources().getString(R.string.get_config));
 		}
+		*/
 	}
 
 	@SuppressWarnings("unused")
@@ -469,5 +700,17 @@ public class DeviceControlBLESerialActivity extends Activity {
 			chgEt = findViewById(R.id.pwSec);
 			chgEt.setVisibility(View.INVISIBLE);
 		}
+	}
+
+	private byte[] BleSerial_decode(byte[] value)
+	{
+		byte[] decodedData = xorCode(mmDevice.getName(), value, value.length);
+		return decodedData;
+	}
+
+	private byte[] BleSerial_encode(byte[] value)
+	{
+		byte[] encodedData = xorCode(mmDevice.getName(), value, value.length);
+		return encodedData;
 	}
 }
