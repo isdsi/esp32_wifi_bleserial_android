@@ -282,6 +282,8 @@ public class BluetoothLeService extends Service {
 		payloadSize = s;
 	}
 
+	public int getPayloadSize() { return payloadSize; }
+
 	// write
 	public void write(byte[] data) {
 		if (mBluetoothAdapter == null || mBluetoothGatt == null) {

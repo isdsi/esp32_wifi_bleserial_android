@@ -1,15 +1,18 @@
 package tk.giesecke.esp32wifible;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.bluetooth.BluetoothDevice;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -19,9 +22,7 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -34,8 +35,11 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -54,7 +58,9 @@ public class DeviceControlBLESerialActivity extends Activity {
 	private final static String TAG = "ESP32WIFI_BLE_CTRL";
 
 	private TextView mDataField;
-	private String mDeviceAddress;
+    private TextView tvFileSystem;
+    private TextView tvFileName;
+    private String mDeviceAddress;
 	private BluetoothLeService mBluetoothLeService;
 	private boolean mConnected = false;
 	private BluetoothDevice mmDevice;
@@ -70,12 +76,29 @@ public class DeviceControlBLESerialActivity extends Activity {
 	private final Handler mainLooper = new Handler(Looper.getMainLooper());
 
 	private DeviceControlBLESerialActivity thisActivity;
-	private int ble_state;
+
+    private int ble_timer10ms = 0;
+
+    private int ble_state;
 	private int ble_state_timer100ms = 0;
+	private int ble_connect_state;
+	private int ble_connect_state_timer100ms = 0;
 	private String ble_write_string;
 	private String ble_read_string;
 	private int ble_config_count;
 	private int ble_config_index;
+	private String ble_file_name;
+	private long ble_file_size;
+	private long ble_file_crc;
+
+	private FileInputStream fis = null;
+	private FileOutputStream fos = null;
+
+	private static final int REQUEST_GET_CONTENT = 1;
+	private static final int REQUEST_CREATE_DOCUMENT = 2;
+
+	private String arrFileName[] = null;
+	private Long arrFileSize[] = null;
 
 	// Code to manage Service lifecycle.
 	private final ServiceConnection mServiceConnection = new ServiceConnection() {
@@ -148,23 +171,57 @@ public class DeviceControlBLESerialActivity extends Activity {
                     case BluetoothLeService.ACTION_CHANGED_READ_DESCRIPTOR:
                         Log.d(TAG, "Changed ReadDescriptor");
 
-						ble_state = 100; // read config_count, read config_index
+						ble_connect_state = 100;
                         break;
 
                     case BluetoothLeService.ACTION_READ_NRF_CHARACTERISTIC:
                         data = intent.getByteArrayExtra(BluetoothLeService.EXTRA_DATA);
-						if (data != null) {
-							ble_read_string = new String(BleSerial_decode(data));
-							Log.d(TAG, "rs " + ble_read_string);
-							displayData("Received:\n--\n" + data + "\n--\n" + ble_read_string);
+                        if (ble_file_size > 0) {
+                        	if (fos != null) {
+                        		ble_state_timer100ms = 10; // prevent timeout
+                        		long bytes_to_write;
+                        		if (ble_file_size - data.length >= 0) {
+									bytes_to_write = data.length;
+								} else {
+									bytes_to_write = ble_file_size;
+								}
+								try {
+									fos.write(data, 0, (int)bytes_to_write);
+									ble_file_size -= bytes_to_write;
+								} catch (IOException e) {
+									e.printStackTrace();
+								}
+							}
+						} else {
+							if (data != null) {
+								ble_read_string = new String(BleSerial_decode(data));
+								Log.d(TAG, "rs " + ble_read_string);
+								displayData("Received:\n--\n" + data + "\n--\n" + ble_read_string);
+							}
 						}
                         break;
 
                     case BluetoothLeService.ACTION_WRITE_NRF_CHARACTERISTIC:
-                        // write -> writeNext -> writeNext ... -> writeNext ( data will be empty. )
-                        if (mBluetoothLeService != null) {
-                            mBluetoothLeService.writeNext();
-                        }
+						if (ble_file_size > 0) {
+							if (fis != null) {
+								ble_state_timer100ms = 10; // prevent timeout
+								int payload = mBluetoothLeService.getPayloadSize();
+								long bytes_to_read;
+								if (ble_file_size - payload >= 0) {
+									bytes_to_read = payload;
+								} else {
+									bytes_to_read = ble_file_size;
+								}
+								data = new byte[(int)bytes_to_read];
+								try {
+									fis.read(data, 0, (int)bytes_to_read); // don't need to care remain bytes.
+									ble_file_size -= bytes_to_read;
+								} catch (IOException e) {
+									e.printStackTrace();
+								}
+								mBluetoothLeService.writeNrfCharacteristic(data);
+							}
+						}
                         break;
                 }
 			}
@@ -251,6 +308,8 @@ public class DeviceControlBLESerialActivity extends Activity {
 
 		// Sets up UI references.
 		mDataField = findViewById(R.id.data_value);
+        tvFileSystem = findViewById(R.id.tvFileSystem);
+        tvFileName = findViewById(R.id.tvFileName);
 
 		//noinspection ConstantConditions
 		getActionBar().setTitle(mDeviceName);
@@ -274,17 +333,32 @@ public class DeviceControlBLESerialActivity extends Activity {
 				});
 			}
 		};
-		t.scheduleAtFixedRate(tt, 0, 100);
+		t.scheduleAtFixedRate(tt, 0, 10);
 	}
 
 	public void timer1_Tick() {
-		if (ble_state_timer100ms > 0)
-			ble_state_timer100ms--;
-		if (ble_state_timer100ms == 0) {
-			ble_state_timer100ms = 10;
-		}
+	    if (ble_timer10ms > 0)
+            ble_timer10ms--;
+        if (ble_timer10ms == 0) {
+            ble_timer10ms = 10;
+
+            // 10ms tick
+            if (ble_state_timer100ms > 0)
+                ble_state_timer100ms--;
+            if (ble_connect_state_timer100ms > 0)
+				ble_connect_state_timer100ms--;
+        }
+        // 100ms tick
+        /*
+        if (ble_state_timer100ms > 0)
+            ble_state_timer100ms--;
+		if (ble_connect_state_timer100ms > 0)
+			ble_connect_state_timer100ms--;
+        */
 		JSONObject jo;
 		JSONArray ja;
+		String s;
+		byte[] data0 = new byte[1];
 
 		switch(ble_state) {
 		case 0:
@@ -309,7 +383,7 @@ public class DeviceControlBLESerialActivity extends Activity {
 			ble_read_string = "";
 			ble_write_string = jo.toString();
 			Log.d(TAG, "ws " + ble_write_string);
-			mBluetoothLeService.writeNrfCharacteristic(BleSerial_decode(ble_write_string.getBytes()));
+			mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
 			ble_state_timer100ms = 10;
 			ble_state++;
 			break;
@@ -352,7 +426,7 @@ public class DeviceControlBLESerialActivity extends Activity {
 			ble_read_string = "";
 			ble_write_string = jo.toString();
 			Log.d(TAG, "ws " + ble_write_string);
-			mBluetoothLeService.writeNrfCharacteristic(BleSerial_decode(ble_write_string.getBytes()));
+			mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
 			ble_state_timer100ms = 10;
 			ble_state++;
 			break;
@@ -408,7 +482,7 @@ public class DeviceControlBLESerialActivity extends Activity {
 			ble_read_string = "";
 			ble_write_string = jo.toString();
 			Log.d(TAG, "ws " + ble_write_string);
-			mBluetoothLeService.writeNrfCharacteristic(BleSerial_decode(ble_write_string.getBytes()));
+			mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
 			ble_state_timer100ms = 10;
 			ble_state++;
 			break;
@@ -423,7 +497,7 @@ public class DeviceControlBLESerialActivity extends Activity {
 				break;
 
 			try {
-				ble_config_count = 0;
+
 				jo = new JSONObject(ble_read_string);
 				if (jo.getString("read").equals("value")) {
 					ja = jo.getJSONArray("value");
@@ -439,11 +513,225 @@ public class DeviceControlBLESerialActivity extends Activity {
 				ble_state = 0;
 				break;
 			}
-			ble_config_index = 0;
+
+			ble_state = 0;
+			break;
+
+        case 140:
+            jo = new JSONObject();
+            try {
+                jo.put("read", "filesystem");
+            } catch (JSONException e) {
+                e.printStackTrace();
+                Toast.makeText(this, "json stringify failed", Toast.LENGTH_LONG).show();
+                ble_state = 0;
+                break;
+            }
+            tvFileSystem.setText("");
+            ble_read_string = "";
+            ble_write_string = jo.toString();
+            Log.d(TAG, "ws " + ble_write_string);
+            mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
+            ble_state_timer100ms = 10;
+            ble_state++;
+            break;
+
+        case 141:
+            if (ble_state_timer100ms == 0) {
+                Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
+                ble_state = 0;
+                break;
+            }
+            if (ble_read_string.equals(""))
+                break;
+
+            try {
+
+                jo = new JSONObject(ble_read_string);
+                s = "";
+                if (jo.getString("read").equals("filesystem")) {
+                    if (jo.getString("result").equals("ok")) {
+                        s = "totalBytes ";
+                        s += jo.getString("totalBytes");
+                        s += " usedBytes ";
+                        s += jo.getString("usedBytes");
+                    } else {
+                        s = jo.getString("result");
+                    }
+                } else {
+                    s = "json invalid";
+                }
+                tvFileSystem.setText(s);
+            } catch (JSONException e) {
+                e.printStackTrace();
+                Toast.makeText(this, "json parse failed", Toast.LENGTH_LONG).show();
+                ble_state = 0;
+                break;
+            }
+
+            ble_state = 0;
+            break;
+
+        case 150:
+            jo = new JSONObject();
+            try {
+                jo.put("read", "listDir");
+            } catch (JSONException e) {
+                e.printStackTrace();
+                Toast.makeText(this, "json stringify failed", Toast.LENGTH_LONG).show();
+                ble_state = 0;
+                break;
+            }
+
+            ble_read_string = "";
+            ble_write_string = jo.toString();
+            Log.d(TAG, "ws " + ble_write_string);
+            mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
+            ble_state_timer100ms = 10;
+            ble_state++;
+            break;
+
+        case 151:
+            if (ble_state_timer100ms == 0) {
+                Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
+                ble_state = 0;
+                break;
+            }
+            if (ble_read_string.equals(""))
+                break;
+
+            try {
+
+                jo = new JSONObject(ble_read_string);
+                s = "";
+                if (jo.getString("read").equals("listDir")) {
+                    if (jo.getString("result").equals("ok")) {
+                        ja = jo.getJSONArray("listDirFileName");
+						arrFileName = new String[ja.length()];
+                        for(int i = 0; i < ja.length(); i++) {
+                            s += ja.getString(i) + " ";
+							arrFileName[i] = ja.getString(i);
+                        }
+                        ja = jo.getJSONArray("listDirFileSize");
+						arrFileSize = new Long[ja.length()];
+						for(int i = 0; i < ja.length(); i++) {
+                            s += ja.get(i).toString() + " ";
+							arrFileSize[i] = ja.getLong(i);
+                        }
+                    } else {
+                        s = jo.getString("result");
+                    }
+                } else {
+                    s = "json invalid";
+                }
+
+            } catch (JSONException e) {
+                e.printStackTrace();
+                Toast.makeText(this, "json parse failed", Toast.LENGTH_LONG).show();
+                ble_state = 0;
+                break;
+            }
+
+            ble_state = 0;
+            break;
+
+        case 160:
+            jo = new JSONObject();
+            try {
+                jo.put("read", "file");
+                jo.put("fileName", "/" + ble_file_name);
+            } catch (JSONException e) {
+                e.printStackTrace();
+                Toast.makeText(this, "json stringify failed", Toast.LENGTH_LONG).show();
+                ble_state = 0;
+                break;
+            }
+			ble_file_size = 0;
+
+            ble_read_string = "";
+            ble_write_string = jo.toString().replaceAll("\\\\", ""); // "\/test.txt" problems
+            Log.d(TAG, "ws " + ble_write_string);
+            mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
+            ble_state_timer100ms = 10;
+            ble_state++;
+            break;
+
+        case 161:
+            if (ble_state_timer100ms == 0) {
+                Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
+                ble_state = 0;
+                break;
+            }
+            if (ble_read_string.equals(""))
+                break;
+
+			s = "";
+            try {
+                jo = new JSONObject(ble_read_string);
+                if (jo.getString("read").equals("file")) {
+                    if (jo.getString("result").equals("ok")) {
+                        ble_file_size = jo.getLong("fileSize");
+                        ble_file_crc = jo.getLong("fileCRC");
+                    } else {
+                        s = jo.getString("result");
+                    }
+                } else {
+                    s = "json invalid";
+                }
+            } catch (JSONException e) {
+                e.printStackTrace();
+                Toast.makeText(this, "json parse failed", Toast.LENGTH_LONG).show();
+				ble_file_size = 0;
+                ble_state = 0;
+                break;
+            }
+			if (s.equals("") == false) {
+				Toast.makeText(this, s, Toast.LENGTH_LONG).show();
+				ble_file_size = 0;
+				ble_state = 0;
+				break;
+			}
+			/*
+            try {
+            	// stream is already open
+				//fos = new FileOutputStream(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath() + "/" + ble_file_name);
+			} catch (FileNotFoundException e) {
+            	e.printStackTrace();
+				Toast.makeText(this, "file not found", Toast.LENGTH_LONG).show();
+				ble_file_size = 0;
+				ble_state = 0;
+				break;
+			}
+			*/
+
+            ble_state++;
+            break;
+
+		case 162:
+			if (ble_state_timer100ms == 0) {
+				Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
+				ble_state++;
+				break;
+			}
+			if (ble_file_size > 0)
+				break;
+
+			Toast.makeText(this, "completed", Toast.LENGTH_LONG).show();
 			ble_state++;
 			break;
 
-		case 230:
+		case 163:
+			try {
+				fos.close();
+				fos = null;
+			} catch(IOException e) {
+				e.printStackTrace();
+			}
+			ble_file_size = 0;
+			ble_state = 0;
+			break;
+
+        case 230:
 			jo = new JSONObject();
 			try {
 				jo.put("write", "value");
@@ -463,7 +751,7 @@ public class DeviceControlBLESerialActivity extends Activity {
 			ble_read_string = "";
 			ble_write_string = jo.toString();
 			Log.d(TAG, "ws " + ble_write_string);
-			mBluetoothLeService.writeNrfCharacteristic(BleSerial_decode(ble_write_string.getBytes()));
+			mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
 			ble_state_timer100ms = 10;
 			ble_state++;
 			break;
@@ -491,6 +779,124 @@ public class DeviceControlBLESerialActivity extends Activity {
 			ble_state = 0;
 			break;
 
+		case 260:
+			jo = new JSONObject();
+			try {
+				jo.put("write", "file");
+				jo.put("fileName", "/" + ble_file_name);
+				jo.put("fileSize", fis.getChannel().size());
+				jo.put("fileCRC", 0);
+			} catch (JSONException e) {
+				e.printStackTrace();
+				Toast.makeText(this, "json stringify failed", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			} catch (IOException e) {
+				e.printStackTrace();
+				Toast.makeText(this, "file input stream failed", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			}
+			ble_file_size = 0;
+
+			ble_read_string = "";
+			ble_write_string = jo.toString().replaceAll("\\\\", ""); // "\/test.txt" problems
+			Log.d(TAG, "ws " + ble_write_string);
+			mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
+			ble_state_timer100ms = 10;
+			ble_state++;
+			break;
+
+		case 261:
+			if (ble_state_timer100ms == 0) {
+				Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			}
+			if (ble_read_string.equals(""))
+				break;
+
+			s = "";
+			try {
+				jo = new JSONObject(ble_read_string);
+				if (jo.getString("write").equals("file")) {
+					if (jo.getString("result").equals("ok")) {
+
+					} else {
+						s = jo.getString("result");
+					}
+				} else {
+					s = "json invalid";
+				}
+			} catch (JSONException e) {
+				e.printStackTrace();
+				Toast.makeText(this, "json parse failed", Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			}
+			if (s.equals("") == false) {
+				Toast.makeText(this, s, Toast.LENGTH_LONG).show();
+				ble_state = 0;
+				break;
+			}
+
+			try {
+				// stream is already opened
+				//fis = new FileInputStream(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath() + "/" + ble_file_name);
+				ble_file_size = fis.getChannel().size();
+				fis.read(data0, 0, 1);
+				ble_file_size--;
+			} catch (FileNotFoundException e) {
+				e.printStackTrace();
+				Toast.makeText(this, "file not found", Toast.LENGTH_LONG).show();
+				ble_file_size = 0;
+				ble_state = 0;
+				break;
+			} catch(IOException e) {
+				e.printStackTrace();
+				Toast.makeText(this, "file input stream failed", Toast.LENGTH_LONG).show();
+				ble_file_size = 0;
+				ble_state = 0;
+				break;
+			}
+
+			ble_state_timer100ms = 5; // give time esp32 to get ready
+			ble_state++;
+			break;
+
+		case 262:
+			if (ble_state_timer100ms != 0)
+				break;
+
+			mBluetoothLeService.writeNrfCharacteristic(data0); // for triggring ACTION_WRITE_NRF_CHARACTERISTIC
+			ble_state_timer100ms = 10;
+			ble_state++;
+			break;
+
+		case 263:
+			if (ble_state_timer100ms == 0) {
+				Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
+				ble_state++;
+				break;
+			}
+			if (ble_file_size > 0)
+				break;
+
+			Toast.makeText(this, "completed", Toast.LENGTH_LONG).show();
+			ble_state++;
+			break;
+
+		case 264:
+			try {
+				fis.close();
+				fis = null;
+			} catch(IOException e) {
+				e.printStackTrace();
+			}
+			ble_file_size = 0;
+			ble_state = 0;
+			break;
+
 		case 300:
 			jo = new JSONObject();
 			try {
@@ -504,7 +910,7 @@ public class DeviceControlBLESerialActivity extends Activity {
 			ble_read_string = "";
 			ble_write_string = jo.toString();
 			Log.d(TAG, "ws " + ble_write_string);
-			mBluetoothLeService.writeNrfCharacteristic(BleSerial_decode(ble_write_string.getBytes()));
+			mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
 			ble_state_timer100ms = 10;
 			ble_state++;
 			break;
@@ -529,6 +935,73 @@ public class DeviceControlBLESerialActivity extends Activity {
 				ble_state = 0;
 				break;
 			}
+			ble_state = 0;
+			break;
+
+        case 310:
+            jo = new JSONObject();
+            try {
+                jo.put("reset", "");
+            } catch (JSONException e) {
+                e.printStackTrace();
+                Toast.makeText(this, "json stringify failed", Toast.LENGTH_LONG).show();
+                ble_state = 0;
+                break;
+            }
+            ble_read_string = "";
+            ble_write_string = jo.toString();
+            Log.d(TAG, "ws " + ble_write_string);
+            mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
+            ble_state_timer100ms = 10;
+            ble_state++;
+            break;
+
+		}
+
+		switch(ble_connect_state) {
+		case 100:
+			ble_state = 110;// read config_count, read config_index
+			ble_connect_state_timer100ms = 50;
+			ble_connect_state++;
+			break;
+
+		case 101:
+			if (ble_state != 0)
+				break;
+
+			if (ble_connect_state_timer100ms == 0) {
+				ble_connect_state = 0;
+				break;
+			}
+
+			ble_state = 140; // read filesystem
+			ble_connect_state_timer100ms = 50;
+			ble_connect_state++;
+			break;
+
+		case 102:
+			if (ble_state != 0)
+				break;
+
+			if (ble_connect_state_timer100ms == 0) {
+				ble_connect_state = 0;
+				break;
+			}
+
+			ble_state = 150; // read listDir
+			ble_connect_state_timer100ms = 50;
+			ble_connect_state++;
+			break;
+
+		case 103:
+			if (ble_state != 0)
+				break;
+
+			if (ble_connect_state_timer100ms == 0) {
+				ble_connect_state = 0;
+				break;
+			}
+
 			ble_state = 0;
 			break;
 		}
@@ -632,7 +1105,123 @@ public class DeviceControlBLESerialActivity extends Activity {
 
 	@SuppressWarnings("unused")
 	public void onClickReset(View v){
-		ble_state = 230; // write value
+		ble_state = 310; // reset
+	}
+
+    public void onClickFileList(View v){
+		showFileDialog();
+    }
+
+    public void onClickFileUpload(View v){
+		// ble_state = 260; // write file
+		Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+		i.setType("*/*");
+		startActivityForResult(i, REQUEST_GET_CONTENT);
+    }
+
+    public void onClickFileDownload(View v){
+        //ble_state = 160; // read file
+		Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+		i.setType("*/*");
+		startActivityForResult(i, REQUEST_CREATE_DOCUMENT);
+    }
+
+    private void showFileDialog() {
+		AlertDialog.Builder adb = new AlertDialog.Builder(thisActivity);
+		adb.setTitle("Select a file");
+		adb.setItems(arrFileName, new DialogInterface.OnClickListener() {
+			@Override
+			public void onClick(DialogInterface dialog, int which) {
+				Toast.makeText(getApplicationContext(), "Result : " + arrFileName[which], Toast.LENGTH_LONG).show();
+				tvFileName.setText(arrFileName[which]);
+			}
+		});
+		adb.setNeutralButton("Close", null);
+		adb.setPositiveButton("Ok", null);
+		adb.setCancelable(false);
+		AlertDialog ad = adb.create();
+		ad.show();
+	}
+
+	@Override
+	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+		if (requestCode == REQUEST_GET_CONTENT) {
+			// local->remote
+			if (data == null)
+				return;
+			Uri uri = data.getData();
+			if (uri == null)
+				return;
+			String uriInfo = uri.toString();
+			Log.d(TAG, "uriInfo " + uriInfo);
+
+			try
+			{
+				fis = (FileInputStream)getApplicationContext().getContentResolver().openInputStream(uri);
+			} catch (FileNotFoundException e) {
+				e.printStackTrace();
+				Toast.makeText(getApplicationContext(), "file not found"  + uriInfo.toString(), Toast.LENGTH_LONG).show();
+				return;
+			} catch (Exception e) {
+				e.printStackTrace();
+				Toast.makeText(getApplicationContext(), "file open failed " + uriInfo.toString(), Toast.LENGTH_LONG).show();
+				return;
+			}
+
+			if (tvFileName.getText().toString().equals("")) {
+				Toast.makeText(getApplicationContext(), "select a file", Toast.LENGTH_LONG).show();
+				return;
+			}
+			/*
+			if (DeviceScanActivity.checkSelfPermission() == false) {
+				Toast.makeText(getApplicationContext(), "require permission", Toast.LENGTH_LONG).show();
+				return;
+			}
+			if (checkParamter() == false)
+				return;
+			*/
+			ble_file_name = tvFileName.getText().toString();
+			ble_state = 260; // write file
+		} else if (requestCode == REQUEST_CREATE_DOCUMENT) {
+			// remote->local
+			if (data == null)
+				return;
+			Uri uri = data.getData();
+			if (uri == null)
+				return;
+
+			String uriInfo = uri.toString();
+			Log.d(TAG, "uriInfo " + uriInfo);
+
+			try
+			{
+				fos = (FileOutputStream)getApplicationContext().getContentResolver().openOutputStream(uri);
+			} catch (FileNotFoundException e) {
+				e.printStackTrace();
+				Toast.makeText(getApplicationContext(), "file not found"  + uriInfo.toString(), Toast.LENGTH_LONG).show();
+				return;
+			} catch (Exception e) {
+				e.printStackTrace();
+				Toast.makeText(getApplicationContext(), "file open failed " + uriInfo.toString(), Toast.LENGTH_LONG).show();
+				return;
+			}
+
+			if (tvFileName.getText().toString().equals("")) {
+				Toast.makeText(getApplicationContext(), "select a file", Toast.LENGTH_LONG).show();
+				return;
+			}
+			/*
+			if (DeviceScanActivity.checkSelfPermission() == false) {
+				Toast.makeText(getApplicationContext(), "require permission", Toast.LENGTH_LONG).show();
+				return;
+			}
+
+			if (checkParamter() == false)
+				return;
+			*/
+			ble_file_name = tvFileName.getText().toString();
+			ble_state = 160; // read file
+		}
 	}
 
 	private byte[] BleSerial_decode(byte[] value)
