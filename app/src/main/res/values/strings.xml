@@ -42,4 +42,10 @@
     <string name="menu_disconnect">Disconnect</string>
     <string name="menu_scan">Scan</string>
     <string name="menu_stop">Stop Scan</string>
+
+    <string name="tv_file_system">File System</string>
+    <string name="b_file_list">File List</string>
+    <string name="tv_file_name">File Name</string>
+    <string name="b_file_upload">FIle Upload</string>
+    <string name="b_file_download">File Download</string>
 </resources>

@@ -16,7 +16,6 @@
         android:id="@+id/left_button_ll"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_toStartOf="@+id/center"
         android:orientation="horizontal">
 
         <Button
@@ -39,14 +38,6 @@
             android:textColor="@android:color/holo_green_dark"
             android:textStyle="bold" />
 
-    </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/right_button_ll"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_toEndOf="@+id/center"
-        android:orientation="horizontal">
 
         <Button
             android:id="@+id/eraseBT"
@@ -70,112 +61,114 @@
 
     </LinearLayout>
 
+
+    <TextView
+        android:id="@+id/tvFileSystemHdr"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentStart="true"
+        android:layout_alignParentEnd="true"
+        android:layout_below="@+id/left_button_ll"
+        android:text="@string/tv_file_system"
+        tools:ignore="MissingConstraints"
+        />
+
+    <TextView
+        android:id="@+id/tvFileSystem"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentStart="true"
+        android:layout_alignParentEnd="true"
+        android:layout_below="@+id/tvFileSystemHdr"
+        android:text=""
+        tools:ignore="MissingConstraints"
+        />
+
+
+    <LinearLayout
+        android:id="@+id/left_button_lll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@+id/tvFileSystem"
+        android:orientation="horizontal">
+        <Button
+            android:id="@+id/bFileList"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:onClick="onClickFileList"
+            android:text="@string/b_file_list"
+            tools:ignore="MissingConstraints"
+            />
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvRemoteFile"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/tv_file_name"
+                tools:ignore="MissingConstraints"
+                />
+
+            <TextView
+                android:id="@+id/tvRemoteFileName"
+                android:layout_width="wrap_content"
+                android:layout_height="fill_parent"
+                android:text=""
+                tools:ignore="MissingConstraints"
+                />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/bFileUpload"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:onClick="onClickFileUpload"
+            android:text="@string/b_file_upload"
+            tools:ignore="MissingConstraints"
+            />
+
+        <Button
+            android:id="@+id/bFileDownload"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:onClick="onClickFileDownload"
+            android:text="@string/b_file_download"
+            tools:ignore="MissingConstraints"
+            />
+    </LinearLayout>
+
+
     <TextView
         android:id="@+id/data_value"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="50dp"
         android:layout_alignParentStart="false"
         android:layout_alignParentTop="false"
-        android:layout_below="@+id/pwPrim"
+        android:layout_below="@+id/left_button_lll"
         android:text="@string/no_data" />
 
-    <Switch
-        android:id="@+id/apNumSelector"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentStart="true"
-        android:layout_below="@+id/left_button_ll"
-        android:checked="false"
-        android:onClick="onClickSwitch"
-        android:text="@string/sel_num_ap" />
-
-    <TextView
-        android:id="@+id/ssidPrimHdr"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentStart="true"
-        android:layout_below="@+id/apNumSelector"
-        android:layout_toStartOf="@+id/center"
-        android:text="@string/ssid_prim"
-        android:textSize="18sp" />
-
-    <EditText
-        android:id="@+id/ssidPrim"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentStart="true"
-        android:layout_below="@+id/ssidPrimHdr"
-        android:layout_toStartOf="@+id/center"
-        android:inputType="textPersonName"
-        android:hint="@string/ssid_prim"
-        tools:ignore="LabelFor" />
-
-    <TextView
-        android:id="@+id/pwPrimHdr"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentStart="true"
-        android:layout_below="@+id/ssidPrim"
-        android:layout_toStartOf="@+id/center"
-        android:text="@string/pw_prim"
-        android:textSize="18sp" />
-
-    <EditText
-        android:id="@+id/pwPrim"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentStart="true"
-        android:layout_below="@+id/pwPrimHdr"
-        android:layout_toStartOf="@+id/center"
-        android:inputType="textPersonName"
-        android:hint="@string/pw_sec"
-        tools:ignore="LabelFor" />
-
-    <TextView
-        android:id="@+id/ssidSecHdr"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentEnd="true"
-        android:layout_below="@+id/apNumSelector"
-        android:layout_toEndOf="@+id/center"
-        android:text="@string/ssid_sec"
-        android:textSize="18sp"
-        android:visibility="invisible" />
-
-    <EditText
-        android:id="@+id/ssidSec"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentEnd="true"
-        android:layout_below="@+id/ssidSecHdr"
-        android:layout_toEndOf="@+id/center"
-        android:inputType="textPersonName"
-        android:hint="@string/ssid_sec"
-        tools:ignore="LabelFor"
-        android:visibility="invisible" />
-
-    <TextView
-        android:id="@+id/pwSecHdr"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentEnd="true"
-        android:layout_below="@+id/ssidSec"
-        android:layout_toEndOf="@+id/center"
-        android:text="@string/pw_sec"
-        android:textSize="18sp"
-        android:visibility="invisible" />
-
-    <EditText
-        android:id="@+id/pwSec"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentEnd="true"
-        android:layout_below="@+id/pwSecHdr"
-        android:layout_toEndOf="@+id/center"
-        android:inputType="textPersonName"
-        android:hint="@string/pw_sec"
-        tools:ignore="LabelFor"
-        android:visibility="invisible" />
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="fill_parent"
+        android:layout_alignParentStart="false"
+        android:layout_alignParentTop="false"
+        android:layout_below="@+id/data_value"
+        >
+        <LinearLayout
+            android:id="@+id/llConfig"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            >
+        </LinearLayout>
+    </ScrollView>
 
 </RelativeLayout>
 
