@@ -42,6 +42,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.zip.CRC32;
 
 import static tk.giesecke.esp32wifible.DeviceScanActivity.EXTRAS_DEVICE;
 import static tk.giesecke.esp32wifible.DeviceScanActivity.EXTRAS_DEVICE_ADDRESS;
@@ -90,6 +91,7 @@ public class DeviceControlBLESerialActivity extends Activity {
 	private String ble_file_name;
 	private long ble_file_size;
 	private long ble_file_crc;
+	private final int ble_file_timeout_100ms = 30;
 
 	private FileInputStream fis = null;
 	private FileOutputStream fos = null;
@@ -99,6 +101,8 @@ public class DeviceControlBLESerialActivity extends Activity {
 
 	private String arrFileName[] = null;
 	private Long arrFileSize[] = null;
+
+	private CRC32 crc = new CRC32();
 
 	// Code to manage Service lifecycle.
 	private final ServiceConnection mServiceConnection = new ServiceConnection() {
@@ -178,7 +182,7 @@ public class DeviceControlBLESerialActivity extends Activity {
                         data = intent.getByteArrayExtra(BluetoothLeService.EXTRA_DATA);
                         if (ble_file_size > 0) {
                         	if (fos != null) {
-                        		ble_state_timer100ms = 10; // prevent timeout
+                        		ble_state_timer100ms = ble_file_timeout_100ms; // prevent timeout
                         		long bytes_to_write;
                         		if (ble_file_size - data.length >= 0) {
 									bytes_to_write = data.length;
@@ -186,7 +190,9 @@ public class DeviceControlBLESerialActivity extends Activity {
 									bytes_to_write = ble_file_size;
 								}
 								try {
+                        			Log.d(TAG, "w" + bytes_to_write);
 									fos.write(data, 0, (int)bytes_to_write);
+									crc.update(data, 0, (int)bytes_to_write); // if you want to delete this, you should know how to get a real path from uri onActivityResult
 									ble_file_size -= bytes_to_write;
 								} catch (IOException e) {
 									e.printStackTrace();
@@ -204,8 +210,8 @@ public class DeviceControlBLESerialActivity extends Activity {
                     case BluetoothLeService.ACTION_WRITE_NRF_CHARACTERISTIC:
 						if (ble_file_size > 0) {
 							if (fis != null) {
-								ble_state_timer100ms = 10; // prevent timeout
-								int payload = mBluetoothLeService.getPayloadSize();
+								ble_state_timer100ms = ble_file_timeout_100ms; // prevent timeout
+								int payload = 256;
 								long bytes_to_read;
 								if (ble_file_size - payload >= 0) {
 									bytes_to_read = payload;
@@ -214,12 +220,13 @@ public class DeviceControlBLESerialActivity extends Activity {
 								}
 								data = new byte[(int)bytes_to_read];
 								try {
+									Log.d(TAG, "r" + bytes_to_read);
 									fis.read(data, 0, (int)bytes_to_read); // don't need to care remain bytes.
 									ble_file_size -= bytes_to_read;
 								} catch (IOException e) {
 									e.printStackTrace();
 								}
-								mBluetoothLeService.writeNrfCharacteristic(data);
+								mBluetoothLeService.writeNrfCharacteristicNoResponse(data);
 							}
 						}
                         break;
@@ -337,17 +344,18 @@ public class DeviceControlBLESerialActivity extends Activity {
 	}
 
 	public void timer1_Tick() {
-	    if (ble_timer10ms > 0)
-            ble_timer10ms--;
-        if (ble_timer10ms == 0) {
-            ble_timer10ms = 10;
+		if (ble_timer10ms > 0)
+			ble_timer10ms--;
+		if (ble_timer10ms == 0) {
+			ble_timer10ms = 10;
 
-            // 10ms tick
-            if (ble_state_timer100ms > 0)
-                ble_state_timer100ms--;
-            if (ble_connect_state_timer100ms > 0)
+			// 10ms tick
+			if (ble_state_timer100ms > 0)
+				ble_state_timer100ms--;
+			if (ble_connect_state_timer100ms > 0)
 				ble_connect_state_timer100ms--;
-        }
+		}
+
         // 100ms tick
         /*
         if (ble_state_timer100ms > 0)
@@ -555,6 +563,9 @@ public class DeviceControlBLESerialActivity extends Activity {
                         s += jo.getString("totalBytes");
                         s += " usedBytes ";
                         s += jo.getString("usedBytes");
+						Long freeBytes =  jo.getLong("totalBytes") - jo.getLong("usedBytes");
+						s += " freeBytes ";
+						s += freeBytes.toString();
                     } else {
                         s = jo.getString("result");
                     }
@@ -643,7 +654,7 @@ public class DeviceControlBLESerialActivity extends Activity {
             } catch (JSONException e) {
                 e.printStackTrace();
                 Toast.makeText(this, "json stringify failed", Toast.LENGTH_LONG).show();
-                ble_state = 0;
+                ble_state = 170;
                 break;
             }
 			ble_file_size = 0;
@@ -652,14 +663,14 @@ public class DeviceControlBLESerialActivity extends Activity {
             ble_write_string = jo.toString().replaceAll("\\\\", ""); // "\/test.txt" problems
             Log.d(TAG, "ws " + ble_write_string);
             mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
-            ble_state_timer100ms = 10;
+            ble_state_timer100ms = ble_file_timeout_100ms;
             ble_state++;
             break;
 
         case 161:
             if (ble_state_timer100ms == 0) {
                 Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
-                ble_state = 0;
+                ble_state = 170;
                 break;
             }
             if (ble_read_string.equals(""))
@@ -672,6 +683,7 @@ public class DeviceControlBLESerialActivity extends Activity {
                     if (jo.getString("result").equals("ok")) {
                         ble_file_size = jo.getLong("fileSize");
                         ble_file_crc = jo.getLong("fileCRC");
+						crc.reset();
                     } else {
                         s = jo.getString("result");
                     }
@@ -681,28 +693,14 @@ public class DeviceControlBLESerialActivity extends Activity {
             } catch (JSONException e) {
                 e.printStackTrace();
                 Toast.makeText(this, "json parse failed", Toast.LENGTH_LONG).show();
-				ble_file_size = 0;
-                ble_state = 0;
+				ble_state = 170;
                 break;
             }
 			if (s.equals("") == false) {
 				Toast.makeText(this, s, Toast.LENGTH_LONG).show();
-				ble_file_size = 0;
-				ble_state = 0;
+				ble_state = 170;
 				break;
 			}
-			/*
-            try {
-            	// stream is already open
-				//fos = new FileOutputStream(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath() + "/" + ble_file_name);
-			} catch (FileNotFoundException e) {
-            	e.printStackTrace();
-				Toast.makeText(this, "file not found", Toast.LENGTH_LONG).show();
-				ble_file_size = 0;
-				ble_state = 0;
-				break;
-			}
-			*/
 
             ble_state++;
             break;
@@ -710,17 +708,23 @@ public class DeviceControlBLESerialActivity extends Activity {
 		case 162:
 			if (ble_state_timer100ms == 0) {
 				Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
-				ble_state++;
+				ble_state = 170;
 				break;
 			}
 			if (ble_file_size > 0)
 				break;
 
+			if (crc.getValue() != ble_file_crc) {
+				Toast.makeText(this, "crc failed", Toast.LENGTH_LONG).show();
+				ble_state++;
+				break;
+			}
+
 			Toast.makeText(this, "completed", Toast.LENGTH_LONG).show();
-			ble_state++;
+			ble_state = 170;
 			break;
 
-		case 163:
+		case 170: // read file finalize
 			try {
 				fos.close();
 				fos = null;
@@ -785,16 +789,16 @@ public class DeviceControlBLESerialActivity extends Activity {
 				jo.put("write", "file");
 				jo.put("fileName", "/" + ble_file_name);
 				jo.put("fileSize", fis.getChannel().size());
-				jo.put("fileCRC", 0);
+				jo.put("fileCRC", ble_file_crc);
 			} catch (JSONException e) {
 				e.printStackTrace();
 				Toast.makeText(this, "json stringify failed", Toast.LENGTH_LONG).show();
-				ble_state = 0;
+				ble_state = 270;
 				break;
 			} catch (IOException e) {
 				e.printStackTrace();
 				Toast.makeText(this, "file input stream failed", Toast.LENGTH_LONG).show();
-				ble_state = 0;
+				ble_state = 270;
 				break;
 			}
 			ble_file_size = 0;
@@ -803,14 +807,14 @@ public class DeviceControlBLESerialActivity extends Activity {
 			ble_write_string = jo.toString().replaceAll("\\\\", ""); // "\/test.txt" problems
 			Log.d(TAG, "ws " + ble_write_string);
 			mBluetoothLeService.writeNrfCharacteristic(BleSerial_encode(ble_write_string.getBytes()));
-			ble_state_timer100ms = 10;
+			ble_state_timer100ms = ble_file_timeout_100ms;
 			ble_state++;
 			break;
 
 		case 261:
 			if (ble_state_timer100ms == 0) {
 				Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
-				ble_state = 0;
+				ble_state = 270;
 				break;
 			}
 			if (ble_read_string.equals(""))
@@ -831,12 +835,12 @@ public class DeviceControlBLESerialActivity extends Activity {
 			} catch (JSONException e) {
 				e.printStackTrace();
 				Toast.makeText(this, "json parse failed", Toast.LENGTH_LONG).show();
-				ble_state = 0;
+				ble_state = 270;
 				break;
 			}
 			if (s.equals("") == false) {
 				Toast.makeText(this, s, Toast.LENGTH_LONG).show();
-				ble_state = 0;
+				ble_state = 270;
 				break;
 			}
 
@@ -845,22 +849,22 @@ public class DeviceControlBLESerialActivity extends Activity {
 				//fis = new FileInputStream(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath() + "/" + ble_file_name);
 				ble_file_size = fis.getChannel().size();
 				fis.read(data0, 0, 1);
+				Log.d(TAG, "r" + 1);
 				ble_file_size--;
 			} catch (FileNotFoundException e) {
 				e.printStackTrace();
 				Toast.makeText(this, "file not found", Toast.LENGTH_LONG).show();
-				ble_file_size = 0;
-				ble_state = 0;
+				ble_state = 270;
 				break;
 			} catch(IOException e) {
 				e.printStackTrace();
 				Toast.makeText(this, "file input stream failed", Toast.LENGTH_LONG).show();
-				ble_file_size = 0;
-				ble_state = 0;
+				ble_state = 270;
 				break;
 			}
 
-			ble_state_timer100ms = 5; // give time esp32 to get ready
+			ble_read_string = "";
+			ble_state_timer100ms = 1; // give time esp32 to get ready
 			ble_state++;
 			break;
 
@@ -868,7 +872,7 @@ public class DeviceControlBLESerialActivity extends Activity {
 			if (ble_state_timer100ms != 0)
 				break;
 
-			mBluetoothLeService.writeNrfCharacteristic(data0); // for triggring ACTION_WRITE_NRF_CHARACTERISTIC
+			mBluetoothLeService.writeNrfCharacteristicNoResponse(data0); // for triggering ACTION_WRITE_NRF_CHARACTERISTIC
 			ble_state_timer100ms = 10;
 			ble_state++;
 			break;
@@ -876,17 +880,57 @@ public class DeviceControlBLESerialActivity extends Activity {
 		case 263:
 			if (ble_state_timer100ms == 0) {
 				Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
-				ble_state++;
+				ble_state = 270;
 				break;
 			}
 			if (ble_file_size > 0)
 				break;
 
-			Toast.makeText(this, "completed", Toast.LENGTH_LONG).show();
+			ble_state_timer100ms = 10;
 			ble_state++;
 			break;
 
 		case 264:
+			// cannot know if ble_file_size == 0 because of error during file transferring
+			/*
+			if (ble_state_timer100ms == 0) {
+				Toast.makeText(this, "timeout", Toast.LENGTH_LONG).show();
+				ble_state = 270;
+				break;
+			}
+			if (ble_read_string.equals(""))
+				break;
+
+			s = "";
+			try {
+				jo = new JSONObject(ble_read_string);
+				if (jo.getString("write").equals("file")) {
+					if (jo.getString("result").equals("ok")) {
+
+					} else {
+						s = jo.getString("result");
+					}
+				} else {
+					s = "json invalid";
+				}
+			} catch (JSONException e) {
+				e.printStackTrace();
+				Toast.makeText(this, "json parse failed", Toast.LENGTH_LONG).show();
+				ble_state = 270;
+				break;
+			}
+			if (s.equals("") == false) {
+				Toast.makeText(this, s, Toast.LENGTH_LONG).show();
+				ble_state = 270;
+				break;
+			}
+			ble_read_string = "";
+			*/
+			Toast.makeText(this, "completed", Toast.LENGTH_LONG).show();
+			ble_state = 270;
+			break;
+
+		case 270: // write file cancel
 			try {
 				fis.close();
 				fis = null;
@@ -1157,6 +1201,14 @@ public class DeviceControlBLESerialActivity extends Activity {
 
 			try
 			{
+				// first read crc value
+				FileInputStream fisCRC = (FileInputStream)getApplicationContext().getContentResolver().openInputStream(uri);
+				byte[] b = new byte[(int)fisCRC.getChannel().size()];
+				fisCRC.read(b);
+				crc.reset();
+				crc.update(b);
+				fisCRC.close();
+
 				fis = (FileInputStream)getApplicationContext().getContentResolver().openInputStream(uri);
 			} catch (FileNotFoundException e) {
 				e.printStackTrace();
@@ -1181,6 +1233,7 @@ public class DeviceControlBLESerialActivity extends Activity {
 				return;
 			*/
 			ble_file_name = tvFileName.getText().toString();
+			ble_file_crc = crc.getValue();
 			ble_state = 260; // write file
 		} else if (requestCode == REQUEST_CREATE_DOCUMENT) {
 			// remote->local
